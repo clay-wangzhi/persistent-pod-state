@@ -20,9 +20,10 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/klog/v2"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	appsv1alpha1 "github.com/clay-wangzhi/persistent-pod-state/api/apps/v1alpha1"
 )
@@ -33,6 +34,8 @@ type PersistentPodStateReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+// +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstances,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstances/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.clay.io,resources=persistentpodstates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps.clay.io,resources=persistentpodstates/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.clay.io,resources=persistentpodstates/finalizers,verbs=update
@@ -47,10 +50,14 @@ type PersistentPodStateReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.4/pkg/reconcile
 func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
 
-	// TODO(user): your logic here
-
+	// 如果没有找到 PersistentPodState，尝试获取 VirtualMachineInstance 资源
+	var virtualMachineInstance kubevirtv1.VirtualMachineInstance
+	if err := r.Get(ctx, req.NamespacedName, &virtualMachineInstance); err == nil {
+		klog.V(3).InfoS("Found a VirtualMachineInstance resource", "name", req.Name)
+		// 处理 VirtualMachineInstance 逻辑
+		return ctrl.Result{}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
