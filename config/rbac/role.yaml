@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates/status
+  verbs:
+  - get
+  - patch
+  - update
