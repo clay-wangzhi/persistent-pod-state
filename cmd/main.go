@@ -37,6 +37,7 @@ import (
 
 	appsv1alpha1 "github.com/clay-wangzhi/persistent-pod-state/api/apps/v1alpha1"
 	appscontroller "github.com/clay-wangzhi/persistent-pod-state/internal/controller/apps"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -49,6 +50,8 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(appsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kubevirtv1.AddToScheme(scheme))
+
 	// +kubebuilder:scaffold:scheme
 }
 

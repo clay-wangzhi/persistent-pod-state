@@ -20,6 +20,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	// AnnotationAutoGeneratePersistentPodState indicates kruise will auto generate PersistentPodState object
+	// Need to work with AnnotationRequiredPersistentTopology and AnnotationPreferredPersistentTopology
+	AnnotationAutoGeneratePersistentPodState = "clay.io/auto-generate-persistent-pod-state"
+	// AnnotationRequiredPersistentTopology Pod rebuilt topology required for node labels
+	// for example kruise.io/required-persistent-topology: topology.kubernetes.io/zone[,xxx]
+	// optional
+	AnnotationRequiredPersistentTopology = "clay.io/required-persistent-topology"
+)
+
 // PersistentPodStateSpec defines the desired state of PersistentPodState
 type PersistentPodStateSpec struct {
 	// TargetReference contains enough information to let you identify an workload for PersistentPodState

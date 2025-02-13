@@ -30,3 +30,23 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances/status
+  verbs:
+  - get
+  - patch
+  - update
