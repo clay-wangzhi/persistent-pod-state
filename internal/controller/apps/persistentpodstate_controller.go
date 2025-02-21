@@ -24,14 +24,13 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 
-	utilpointer "k8s.io/utils/pointer"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	appsv1alpha1 "github.com/clay-wangzhi/persistent-pod-state/api/apps/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,43 +59,104 @@ type PersistentPodStateReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.4/pkg/reconcile
 func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 
-	// 尝试获取 VirtualMachineInstance 资源
-	var virtualMachineInstance kubevirtv1.VirtualMachineInstance
-	if err := r.Get(ctx, req.NamespacedName, &virtualMachineInstance); err == nil {
-		klog.InfoS("Found a VirtualMachineInstance resource", "name", req.Name)
-		if virtualMachineInstance.Annotations[appsv1alpha1.AnnotationAutoGeneratePersistentPodState] == "true" && virtualMachineInstance.Annotations[appsv1alpha1.AnnotationRequiredPersistentTopology] != "" {
-			return ctrl.Result{}, r.autoGeneratePersistentPodState(virtualMachineInstance)
+	if strings.Contains(req.Name, AutoGeneratePersistentPodStatePrefix+"kubevirt") {
+		switch {
+		case strings.Contains(req.Name, "create#"+AutoGeneratePersistentPodStatePrefix):
+			klog.Info("PersistentPod.spec of kubevirt create/update info ", req.Name)
+			return ctrl.Result{}, r.autoGeneratePersistentPodState(req)
+		case strings.Contains(req.Name, "update#"+AutoGeneratePersistentPodStatePrefix):
+			klog.Info("PersistentPod.status of kubevirt update info ", req.Name)
+			arr := strings.Split(req.Name, "#")
+			if len(arr) != 5 {
+				klog.InfoS("Reconcile PersistentPodState kubevirt is invalid", "workload", req)
+			}
+			name := arr[4]
+
+			persistentPodState := &appsv1alpha1.PersistentPodState{}
+			err := r.Client.Get(context.TODO(), client.ObjectKey{Namespace: req.Namespace, Name: name}, persistentPodState)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					// Object not found, return.  Created objects are automatically garbage collected.
+					// For additional cleanup logic use finalizers.
+					return ctrl.Result{}, nil
+				}
+				// Error reading the object - requeue the request.
+				return ctrl.Result{}, err
+			}
+
+			virtualMachineInstance := &kubevirtv1.VirtualMachineInstance{}
+			err = r.Client.Get(context.TODO(), client.ObjectKey{Namespace: req.Namespace, Name: name}, virtualMachineInstance)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			var vmiIP string
+			var vmiNodeNmae string
+			if len(virtualMachineInstance.Status.Interfaces) == 1 && virtualMachineInstance.Status.Interfaces[0].IP != "" {
+				klog.Info(name, " vmi ip is ", virtualMachineInstance.Status.Interfaces[0].IP, " and nodename is ", virtualMachineInstance.Status.NodeName)
+				vmiIP = virtualMachineInstance.Status.Interfaces[0].IP
+				vmiNodeNmae = virtualMachineInstance.Status.NodeName
+			} else {
+				return ctrl.Result{}, err
+			}
+			newStatus := persistentPodState.Status.DeepCopy()
+			if newStatus.PodStates == nil {
+				newStatus.PodStates = make(map[string]appsv1alpha1.PodState)
+			}
+			nodeTopologyKeys := sets.NewString()
+			if persistentPodState.Spec.RequiredPersistentTopology != nil {
+				nodeTopologyKeys.Insert(persistentPodState.Spec.RequiredPersistentTopology.NodeTopologyKeys...)
+			}
+			podState := appsv1alpha1.PodState{
+				NodeTopologyLabels: map[string]string{},
+			}
+			podState.NodeName = vmiNodeNmae
+			podState.PodIP = vmiIP
+			for _, key := range nodeTopologyKeys.List() {
+				podState.NodeTopologyLabels[key] = vmiNodeNmae
+			}
+			newStatus.PodStates[name] = podState
+			if reflect.DeepEqual(persistentPodState.Status, newStatus) {
+				return ctrl.Result{}, nil
+			}
+			// update PersistentPodState status
+			persistentPodStateClone := &appsv1alpha1.PersistentPodState{}
+			if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+				if err := r.Client.Get(context.TODO(), client.ObjectKey{Namespace: req.Namespace, Name: name}, persistentPodStateClone); err != nil {
+					return err
+				}
+				persistentPodStateClone.Status = *newStatus
+				return r.Client.Status().Update(context.TODO(), persistentPodStateClone)
+			}); err != nil {
+				klog.ErrorS(err, "Failed to update PersistentPodState status", "persistentPodState", klog.KObj(persistentPodState))
+				return ctrl.Result{}, err
+
+			}
+			klog.InfoS("Updated PersistentPodState status success", "persistentPodState", klog.KObj(persistentPodState), "oldPodStatesCount", len(persistentPodState.Status.PodStates), "newPodStatesCount", len(newStatus.PodStates))
 		}
-		return ctrl.Result{}, nil
+
 	}
 
 	return ctrl.Result{}, nil
 }
 
 // auto generate PersistentPodState crd
-func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(virtualMachineInstance kubevirtv1.VirtualMachineInstance) error {
-	// req.Name Format = generate#{apiVersion}#{workload.Kind}#{workload.Name}
-	// example for generate#apps/v1#StatefulSet#echoserver
-	// arr := strings.Split(req.Name, "#")
-	// if len(arr) != 4 {
-	// 	klog.InfoS("Reconcile PersistentPodState workload is invalid", "workload", req)
-	// 	return nil
-	// }
-	// // fetch workload
-	// apiVersion, kind, ns, name := arr[1], arr[2], req.Namespace, arr[3]
-	// workload, err := r.finder.GetScaleAndSelectorForRef(apiVersion, kind, ns, name, "")
-	// if err != nil {
-	// 	return err
-	// } else if workload == nil {
-	// 	klog.InfoS("Reconcile PersistentPodState workload is Not Found", "workload", req)
-	// 	return nil
-	// }
+func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(req ctrl.Request) error {
 
-	ns := virtualMachineInstance.Namespace
-	name := virtualMachineInstance.Name
+	arr := strings.Split(req.Name, "#")
+	if len(arr) != 5 {
+		klog.InfoS("Reconcile PersistentPodState kubevirt is invalid", "workload", req)
+		return nil
+	}
+	ns, name := req.Namespace, arr[4]
+
+	virtualMachineInstance := &kubevirtv1.VirtualMachineInstance{}
+	err := r.Client.Get(context.TODO(), client.ObjectKey{Namespace: ns, Name: name}, virtualMachineInstance)
+	if err != nil {
+		return err
+	}
 	// fetch persistentPodState crd
 	oldObj := &appsv1alpha1.PersistentPodState{}
-	err := r.Client.Get(context.TODO(), client.ObjectKey{Namespace: ns, Name: name}, oldObj)
+	err = r.Client.Get(context.TODO(), client.ObjectKey{Namespace: ns, Name: name}, oldObj)
 	if err != nil {
 		if !errors.IsNotFound(err) {
 			return err
@@ -116,7 +176,7 @@ func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(virtualMac
 		// if err != nil {
 		// 	return err
 		// }
-		newObj := newVMIPersistentPodState(virtualMachineInstance)
+		newObj := newVMIPersistentPodState(*virtualMachineInstance)
 		// create new obj
 		if oldObj == nil {
 			if err = r.Create(context.TODO(), newObj); err != nil {
@@ -125,7 +185,7 @@ func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(virtualMac
 				}
 				return err
 			}
-			klog.V(3).InfoS("Created VMI persistentPodState success", "VMI", klog.KRef(ns, name), "persistentPodState", klog.KObj(newObj))
+			klog.InfoS("Created VMI persistentPodState success", "VMI", klog.KRef(ns, name), "persistentPodState", klog.KObj(newObj))
 			return nil
 		}
 		// compare with old object
@@ -143,7 +203,7 @@ func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(virtualMac
 			klog.ErrorS(err, "Failed to update persistentPodState", "persistentPodState", klog.KObj(newObj))
 			return err
 		}
-		klog.V(3).InfoS("Updated persistentPodState success", "persistentPodState", klog.KObj(newObj), "oldSpec",
+		klog.InfoS("Updated persistentPodState success", "persistentPodState", klog.KObj(newObj), "oldSpec",
 			dumpJSON(oldObj.Spec), "newSpec", dumpJSON(newObj.Spec))
 		return nil
 	}
@@ -155,24 +215,28 @@ func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(virtualMac
 	if err = r.Delete(context.TODO(), oldObj); err != nil {
 		return err
 	}
-	klog.V(3).InfoS("Deleted StatefulSet persistentPodState", "statefulSet", klog.KRef(ns, name))
+	klog.InfoS("Deleted StatefulSet persistentPodState", "statefulSet", klog.KRef(ns, name))
 	return nil
 }
+
+// func (r *PersistentPodStateReconciler) updatePersistentPodStateStatus(req ctrl.Request) error {
+
+// }
 
 func newVMIPersistentPodState(virtualMachineInstance kubevirtv1.VirtualMachineInstance) *appsv1alpha1.PersistentPodState {
 	obj := &appsv1alpha1.PersistentPodState{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      virtualMachineInstance.Name,
 			Namespace: virtualMachineInstance.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: "kubevirt.io/v1",
-					Kind:       "VirtualMachineInstance",
-					Name:       virtualMachineInstance.Name,
-					Controller: utilpointer.BoolPtr(true),
-					UID:        virtualMachineInstance.UID,
-				},
-			},
+			// OwnerReferences: []metav1.OwnerReference{
+			// 	{
+			// 		APIVersion: "kubevirt.io/v1",
+			// 		Kind:       "VirtualMachineInstance",
+			// 		Name:       virtualMachineInstance.Name,
+			// 		Controller: utilpointer.BoolPtr(true),
+			// 		UID:        virtualMachineInstance.UID,
+			// 	},
+			// },
 		},
 		Spec: appsv1alpha1.PersistentPodStateSpec{
 			TargetReference: appsv1alpha1.TargetReference{
@@ -205,7 +269,7 @@ func (r *PersistentPodStateReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		For(&appsv1alpha1.PersistentPodState{}).
 		Watches(
 			&kubevirtv1.VirtualMachineInstance{},
-			&handler.EnqueueRequestForObject{},
+			&enqueueRequestForVirtualMachineInstance{reader: mgr.GetClient()},
 		).
 		Complete(r)
 }
