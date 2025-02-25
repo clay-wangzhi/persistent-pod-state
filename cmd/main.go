@@ -39,6 +39,7 @@ import (
 	"github.com/clay-wangzhi/persistent-pod-state/internal/webhook"
 	webhookutil "github.com/clay-wangzhi/persistent-pod-state/internal/webhook/util"
 	extclient "github.com/clay-wangzhi/persistent-pod-state/pkg/client"
+	"github.com/clay-wangzhi/persistent-pod-state/pkg/features"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
@@ -80,6 +81,7 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+	features.SetDefaultFeatureGates()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -200,7 +202,7 @@ func main() {
 	}()
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

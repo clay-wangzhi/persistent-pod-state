@@ -29,7 +29,7 @@ func GetNamespace() string {
 	if ns := os.Getenv("POD_NAMESPACE"); len(ns) > 0 {
 		return ns
 	}
-	return "persistentpodstate-system"
+	return "persistent-pod-state-system"
 }
 
 func GetSecretName() string {

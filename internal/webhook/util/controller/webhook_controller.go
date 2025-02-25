@@ -138,7 +138,6 @@ func (c *Controller) Start(ctx context.Context) {
 	if !cache.WaitForNamedCacheSync("webhook-controller", ctx.Done(), c.synced...) {
 		return
 	}
-
 	go wait.Until(func() {
 		for c.processNextWorkItem() {
 		}
