@@ -33,11 +33,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	appsv1alpha1 "github.com/clay-wangzhi/persistent-pod-state/api/apps/v1alpha1"
 	appscontroller "github.com/clay-wangzhi/persistent-pod-state/internal/controller/apps"
+	"github.com/clay-wangzhi/persistent-pod-state/internal/webhook"
+	webhookutil "github.com/clay-wangzhi/persistent-pod-state/internal/webhook/util"
+	extclient "github.com/clay-wangzhi/persistent-pod-state/pkg/client"
 	kubevirtv1 "kubevirt.io/api/core/v1"
+	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -95,10 +98,6 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
-	webhookServer := webhook.NewServer(webhook.Options{
-		TLSOpts: tlsOpts,
-	})
-
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
 	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.4/pkg/metrics/server
@@ -123,10 +122,16 @@ func main() {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsServerOptions,
-		WebhookServer:          webhookServer,
+	cfg := ctrl.GetConfigOrDie()
+
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme:  scheme,
+		Metrics: metricsServerOptions,
+		WebhookServer: ctrlwebhook.NewServer(ctrlwebhook.Options{
+			Host:    "0.0.0.0",
+			Port:    webhookutil.GetPort(),
+			CertDir: webhookutil.GetCertDir(),
+		}),
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "5d820af4.clay.io",
@@ -146,24 +151,53 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+	ctx := ctrl.SetupSignalHandler()
 
-	if err = (&appscontroller.PersistentPodStateReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PersistentPodState")
+	setupLog.Info("new clientset registry")
+	err = extclient.NewRegistry(cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to init kruise clientset and informer")
 		os.Exit(1)
 	}
+
+	setupLog.Info("setup webhook")
+	if err = webhook.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup webhook")
+		os.Exit(1)
+	}
+
 	// +kubebuilder:scaffold:builder
+	setupLog.Info("initialize webhook")
+	if err := webhook.Initialize(ctx, cfg); err != nil {
+		setupLog.Error(err, "unable to initialize webhook")
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to set up ready check")
+	if err := mgr.AddReadyzCheck("webhook-ready", webhook.Checker); err != nil {
+		setupLog.Error(err, "unable to add readyz check")
 		os.Exit(1)
 	}
+
+	go func() {
+		setupLog.Info("wait webhook ready")
+		if err = webhook.WaitReady(); err != nil {
+			setupLog.Error(err, "unable to wait webhook ready")
+			os.Exit(1)
+		}
+
+		setupLog.Info("setup controllers")
+		if err = (&appscontroller.PersistentPodStateReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "PersistentPodState")
+			os.Exit(1)
+		}
+	}()
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
