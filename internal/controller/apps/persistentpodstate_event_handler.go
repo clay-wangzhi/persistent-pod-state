@@ -31,6 +31,7 @@ func (p *enqueueRequestForVirtualMachineInstance) Create(ctx context.Context, ev
 	if vmi.Annotations[appsv1alpha1.AnnotationAutoGeneratePersistentPodState] == "true" &&
 		(vmi.Annotations[appsv1alpha1.AnnotationRequiredPersistentTopology] != "") {
 		enqueuePersistentPodStateRequest(q, "create", KindVmi.GroupVersion().String(), KindVmi.Kind, vmi.Namespace, vmi.Name)
+		enqueuePersistentPodStateRequest(q, "update", KindVmi.GroupVersion().String(), KindVmi.Kind, vmi.Namespace, vmi.Name)
 	}
 }
 

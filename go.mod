@@ -10,10 +10,10 @@ require (
 	k8s.io/apimachinery v0.30.9
 	k8s.io/client-go v0.30.9
 	k8s.io/code-generator v0.30.9
+	k8s.io/component-base v0.30.9
 	k8s.io/klog/v2 v2.130.1
 	kubevirt.io/api v1.3.0
 	sigs.k8s.io/controller-runtime v0.18.2
-	sigs.k8s.io/controller-runtime/tools/setup-envtest v0.0.0-20231005234617-5771399a8ce5
 )
 
 require (
@@ -58,7 +58,6 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
-	github.com/spf13/afero v1.6.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stoewer/go-strcase v1.2.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.53.0 // indirect
@@ -91,7 +90,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiextensions-apiserver v0.30.9 // indirect
 	k8s.io/apiserver v0.30.9 // indirect
-	k8s.io/component-base v0.30.9 // indirect
 	k8s.io/gengo/v2 v2.0.0-20240228010128-51d4e06bde70 // indirect
 	k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340 // indirect
 	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8 // indirect

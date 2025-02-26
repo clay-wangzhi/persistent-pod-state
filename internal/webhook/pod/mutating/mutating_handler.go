@@ -19,12 +19,16 @@ package mutating
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 
+	appsv1alpha1 "github.com/clay-wangzhi/persistent-pod-state/api/apps/v1alpha1"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -39,10 +43,10 @@ type PodMutatingHandler struct {
 
 var _ admission.Handler = &PodMutatingHandler{}
 
-func shouldIgnoreIfNotPod(req admission.Request) bool {
+func shouldIgnoreIfNotVMI(req admission.Request) bool {
 	// Ignore all calls to sub resources or resources other than pods.
 	if len(req.AdmissionRequest.SubResource) != 0 ||
-		req.AdmissionRequest.Resource.Resource != "pods" {
+		req.AdmissionRequest.Resource.Resource != "virtualmachineinstances" {
 		return true
 	}
 	return false
@@ -50,11 +54,11 @@ func shouldIgnoreIfNotPod(req admission.Request) bool {
 
 // Handle handles admission requests.
 func (h *PodMutatingHandler) Handle(ctx context.Context, req admission.Request) (resp admission.Response) {
-	if shouldIgnoreIfNotPod(req) {
+	if shouldIgnoreIfNotVMI(req) {
 		return admission.Allowed("")
 	}
 
-	obj := &corev1.Pod{}
+	obj := &kubevirtv1.VirtualMachineInstance{}
 	err := h.Decoder.Decode(req, obj)
 	if err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
@@ -102,29 +106,61 @@ func (h *PodMutatingHandler) Handle(ctx context.Context, req admission.Request) 
 	return admission.PatchResponseFromRaw(original, marshaled)
 }
 
-func (h *PodMutatingHandler) handleCreate(ctx context.Context, req admission.Request, obj *corev1.Pod) error {
-	// if err := h.clusterColocationProfileMutatingPod(ctx, req, obj); err != nil {
-	// 	klog.Errorf("Failed to mutating Pod %s/%s by ClusterColocationProfile, err: %v", obj.Namespace, obj.Name, err)
-	// 	return err
-	// }
+func (h *PodMutatingHandler) handleCreate(ctx context.Context, req admission.Request, obj *kubevirtv1.VirtualMachineInstance) error {
+	// 如果没有annotations，初始化一个空的map
+	if obj.Annotations == nil {
+		obj.Annotations = make(map[string]string)
+	}
 
-	// if err := h.extendedResourceSpecMutatingPod(ctx, req, obj); err != nil {
-	// 	klog.Errorf("Failed to mutating Pod %s/%s by ExtendedResourceSpec, err: %v", obj.Namespace, obj.Name, err)
-	// 	return err
-	// }
+	// 从 persistentpodstate 中获取 IP
+	pps := &appsv1alpha1.PersistentPodState{}
+	ppsName := obj.Name
+	err := h.Client.Get(ctx, types.NamespacedName{
+		Namespace: obj.Namespace,
+		Name:      ppsName,
+	}, pps)
+	if err != nil {
+		klog.Errorf("获取 PersistentPodState %s/%s 失败: %v", obj.Namespace, ppsName, err)
+		return err
+	}
 
-	// if err := h.addNodeAffinityForMultiQuotaTree(ctx, req, obj); err != nil {
-	// 	klog.Errorf("Failed to mutating Pod %s/%s by MultiQuotaTree, err: %v", obj.Namespace, obj.Name, err)
-	// 	return err
-	// }
-	klog.Infof("Testing Pod print scheulername is %s, namespace is %s, PodName is %s", obj.Spec.SchedulerName, obj.Namespace, obj.ObjectMeta.Name)
-	obj.Spec.SchedulerName = "koord-scheduler"
-	klog.Infof("After Testing Pod print scheulername is %s, namespace is %s, PodName is %s", obj.Spec.SchedulerName, obj.Namespace, obj.ObjectMeta.Name)
+	// 添加 Calico 注解以固定 IP
+	if pps.Status.PodStates[obj.Name].PodIP != "" {
+		obj.Annotations["cni.projectcalico.org/ipAddrs"] = fmt.Sprintf("[\"%s\"]", pps.Status.PodStates[obj.Name].PodIP)
+		klog.Infof("已为 VMI %s/%s 添加 Calico IP 固定注解: %s", obj.Namespace, obj.Name, pps.Status.PodStates[obj.Name].PodIP)
+	}
+	// 根据 PersistentPodState 中的 NodeName 添加节点亲和性
+	if pps.Status.PodStates[obj.Name].NodeName != "" {
+		if obj.Spec.Affinity == nil {
+			obj.Spec.Affinity = &corev1.Affinity{}
+		}
+		if obj.Spec.Affinity.NodeAffinity == nil {
+			obj.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+		}
+		if obj.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+			obj.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{}
+		}
+
+		nodeSelectorTerm := corev1.NodeSelectorTerm{
+			MatchExpressions: []corev1.NodeSelectorRequirement{
+				{
+					Key:      "kubernetes.io/hostname",
+					Operator: "In",
+					Values:   []string{pps.Status.PodStates[obj.Name].NodeName},
+				},
+			},
+		}
+
+		obj.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = []corev1.NodeSelectorTerm{nodeSelectorTerm}
+		klog.Infof("已为 VMI %s/%s 添加节点亲和性,指定节点: %s", obj.Namespace, obj.Name, pps.Status.PodStates[obj.Name].NodeName)
+	}
+
+	klog.Infof("Testing VMI print namespace is %s, VMIName is %s, UID is %s", obj.Namespace, obj.ObjectMeta.Name, obj.UID)
 
 	return nil
 }
 
-func (h *PodMutatingHandler) handleUpdate(ctx context.Context, req admission.Request, obj *corev1.Pod) error {
+func (h *PodMutatingHandler) handleUpdate(ctx context.Context, req admission.Request, obj *kubevirtv1.VirtualMachineInstance) error {
 	// TODO: add mutating logic for pod update here
 	return nil
 }

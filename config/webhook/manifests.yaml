@@ -13,7 +13,7 @@ webhooks:
       namespace: system
       path: /mutate-pod
   failurePolicy: Fail
-  name: mpod-create.koordinator.sh
+  name: mpod-create.clay.io
   rules:
   - apiGroups:
     - ""
@@ -33,7 +33,7 @@ webhooks:
       namespace: system
       path: /mutate-pod
   failurePolicy: Fail
-  name: mpod-update.koordinator.sh
+  name: mpod-update.clay.io
   rules:
   - apiGroups:
     - ""
