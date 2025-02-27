@@ -19,6 +19,7 @@ package apps
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 
@@ -28,12 +29,19 @@ import (
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 
+	utilpointer "k8s.io/utils/pointer"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1alpha1 "github.com/clay-wangzhi/persistent-pod-state/api/apps/v1alpha1"
+	calicoapi "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+const (
+	IPReservationSuffix = "-ip-reservation"
+	CIDRSuffix          = "/32"
 )
 
 // PersistentPodStateReconciler reconciles a PersistentPodState object
@@ -47,6 +55,7 @@ type PersistentPodStateReconciler struct {
 // +kubebuilder:rbac:groups=apps.clay.io,resources=persistentpodstates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps.clay.io,resources=persistentpodstates/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.clay.io,resources=persistentpodstates/finalizers,verbs=update
+// +kubebuilder:rbac:groups=projectcalico.org,resources=ipreservations,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -63,7 +72,7 @@ func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.R
 		switch {
 		case strings.Contains(req.Name, "create#"+AutoGeneratePersistentPodStatePrefix):
 			klog.Info("PersistentPod.spec of kubevirt create/update info ", req.Name)
-			return ctrl.Result{}, r.autoGeneratePersistentPodState(req)
+			return ctrl.Result{}, r.autoGeneratePersistentPodState(ctx, req)
 		case strings.Contains(req.Name, "update#"+AutoGeneratePersistentPodStatePrefix):
 			klog.Info("PersistentPod.status of kubevirt update info ", req.Name)
 			arr := strings.Split(req.Name, "#")
@@ -73,7 +82,7 @@ func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.R
 			name := arr[4]
 
 			persistentPodState := &appsv1alpha1.PersistentPodState{}
-			err := r.Client.Get(context.TODO(), client.ObjectKey{Namespace: req.Namespace, Name: name}, persistentPodState)
+			err := r.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: name}, persistentPodState)
 			if err != nil {
 				if errors.IsNotFound(err) {
 					// Object not found, return.  Created objects are automatically garbage collected.
@@ -85,18 +94,52 @@ func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.R
 			}
 
 			virtualMachineInstance := &kubevirtv1.VirtualMachineInstance{}
-			err = r.Client.Get(context.TODO(), client.ObjectKey{Namespace: req.Namespace, Name: name}, virtualMachineInstance)
+			err = r.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: name}, virtualMachineInstance)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 			var vmiIP string
-			var vmiNodeNmae string
+			var vmiNodeName string
 			if len(virtualMachineInstance.Status.Interfaces) == 1 && virtualMachineInstance.Status.Interfaces[0].IP != "" {
 				klog.Info(name, " vmi ip is ", virtualMachineInstance.Status.Interfaces[0].IP, " and nodename is ", virtualMachineInstance.Status.NodeName)
 				vmiIP = virtualMachineInstance.Status.Interfaces[0].IP
-				vmiNodeNmae = virtualMachineInstance.Status.NodeName
+				vmiNodeName = virtualMachineInstance.Status.NodeName
 			} else {
-				return ctrl.Result{}, err
+				return ctrl.Result{}, fmt.Errorf("failed to get VMI IP: no valid interface found")
+			}
+
+			// 创建 Calico IPReservation 资源
+			ipReservation := &calicoapi.IPReservation{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: name + IPReservationSuffix,
+				},
+				Spec: calicoapi.IPReservationSpec{
+					ReservedCIDRs: []string{vmiIP + CIDRSuffix},
+				},
+			}
+
+			// 检查是否已存在 IPReservation
+			existingIPReservation := &calicoapi.IPReservation{}
+			err = r.Client.Get(ctx, client.ObjectKey{Name: ipReservation.Name}, existingIPReservation)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					// 不存在则创建
+					if err := r.Client.Create(ctx, ipReservation); err != nil {
+						klog.ErrorS(err, "创建 IPReservation 失败", "name", ipReservation.Name)
+						return ctrl.Result{}, err
+					}
+					klog.InfoS("成功创建 IPReservation", "name", ipReservation.Name, "ip", vmiIP)
+				} else {
+					return ctrl.Result{}, err
+				}
+			} else {
+				// 已存在则更新
+				existingIPReservation.Spec = ipReservation.Spec
+				if err := r.Client.Update(ctx, existingIPReservation); err != nil {
+					klog.ErrorS(err, "更新 IPReservation 失败", "name", ipReservation.Name)
+					return ctrl.Result{}, err
+				}
+				klog.InfoS("成功更新 IPReservation", "name", ipReservation.Name, "ip", vmiIP)
 			}
 			newStatus := persistentPodState.Status.DeepCopy()
 			if newStatus.PodStates == nil {
@@ -109,10 +152,10 @@ func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.R
 			podState := appsv1alpha1.PodState{
 				NodeTopologyLabels: map[string]string{},
 			}
-			podState.NodeName = vmiNodeNmae
+			podState.NodeName = vmiNodeName
 			podState.PodIP = vmiIP
 			for _, key := range nodeTopologyKeys.List() {
-				podState.NodeTopologyLabels[key] = vmiNodeNmae
+				podState.NodeTopologyLabels[key] = vmiNodeName
 			}
 			newStatus.PodStates[name] = podState
 			if reflect.DeepEqual(persistentPodState.Status, newStatus) {
@@ -121,11 +164,11 @@ func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.R
 			// update PersistentPodState status
 			persistentPodStateClone := &appsv1alpha1.PersistentPodState{}
 			if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-				if err := r.Client.Get(context.TODO(), client.ObjectKey{Namespace: req.Namespace, Name: name}, persistentPodStateClone); err != nil {
+				if err := r.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: name}, persistentPodStateClone); err != nil {
 					return err
 				}
 				persistentPodStateClone.Status = *newStatus
-				return r.Client.Status().Update(context.TODO(), persistentPodStateClone)
+				return r.Client.Status().Update(ctx, persistentPodStateClone)
 			}); err != nil {
 				klog.ErrorS(err, "Failed to update PersistentPodState status", "persistentPodState", klog.KObj(persistentPodState))
 				return ctrl.Result{}, err
@@ -140,7 +183,7 @@ func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.R
 }
 
 // auto generate PersistentPodState crd
-func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(req ctrl.Request) error {
+func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(ctx context.Context, req ctrl.Request) error {
 
 	arr := strings.Split(req.Name, "#")
 	if len(arr) != 5 {
@@ -150,13 +193,13 @@ func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(req ctrl.R
 	ns, name := req.Namespace, arr[4]
 
 	virtualMachineInstance := &kubevirtv1.VirtualMachineInstance{}
-	err := r.Client.Get(context.TODO(), client.ObjectKey{Namespace: ns, Name: name}, virtualMachineInstance)
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, virtualMachineInstance)
 	if err != nil {
 		return err
 	}
 	// fetch persistentPodState crd
 	oldObj := &appsv1alpha1.PersistentPodState{}
-	err = r.Client.Get(context.TODO(), client.ObjectKey{Namespace: ns, Name: name}, oldObj)
+	err = r.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, oldObj)
 	if err != nil {
 		if !errors.IsNotFound(err) {
 			return err
@@ -179,7 +222,7 @@ func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(req ctrl.R
 		newObj := newVMIPersistentPodState(*virtualMachineInstance)
 		// create new obj
 		if oldObj == nil {
-			if err = r.Create(context.TODO(), newObj); err != nil {
+			if err = r.Create(ctx, newObj); err != nil {
 				if errors.IsAlreadyExists(err) {
 					return nil
 				}
@@ -194,11 +237,11 @@ func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(req ctrl.R
 		}
 		objClone := &appsv1alpha1.PersistentPodState{}
 		if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-			if err = r.Client.Get(context.TODO(), client.ObjectKey{Namespace: newObj.Namespace, Name: newObj.Name}, objClone); err != nil {
+			if err = r.Client.Get(ctx, client.ObjectKey{Namespace: newObj.Namespace, Name: newObj.Name}, objClone); err != nil {
 				return err
 			}
 			objClone.Spec = *newObj.Spec.DeepCopy()
-			return r.Client.Update(context.TODO(), objClone)
+			return r.Client.Update(ctx, objClone)
 		}); err != nil {
 			klog.ErrorS(err, "Failed to update persistentPodState", "persistentPodState", klog.KObj(newObj))
 			return err
@@ -212,7 +255,7 @@ func (r *PersistentPodStateReconciler) autoGeneratePersistentPodState(req ctrl.R
 	if oldObj == nil {
 		return nil
 	}
-	if err = r.Delete(context.TODO(), oldObj); err != nil {
+	if err = r.Delete(ctx, oldObj); err != nil {
 		return err
 	}
 	klog.InfoS("Deleted StatefulSet persistentPodState", "statefulSet", klog.KRef(ns, name))
@@ -228,15 +271,15 @@ func newVMIPersistentPodState(virtualMachineInstance kubevirtv1.VirtualMachineIn
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      virtualMachineInstance.Name,
 			Namespace: virtualMachineInstance.Namespace,
-			// OwnerReferences: []metav1.OwnerReference{
-			// 	{
-			// 		APIVersion: "kubevirt.io/v1",
-			// 		Kind:       "VirtualMachineInstance",
-			// 		Name:       virtualMachineInstance.Name,
-			// 		Controller: utilpointer.BoolPtr(true),
-			// 		UID:        virtualMachineInstance.UID,
-			// 	},
-			// },
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: virtualMachineInstance.OwnerReferences[0].APIVersion,
+					Kind:       virtualMachineInstance.OwnerReferences[0].Kind,
+					Name:       virtualMachineInstance.OwnerReferences[0].Name,
+					Controller: utilpointer.BoolPtr(true),
+					UID:        virtualMachineInstance.OwnerReferences[0].UID,
+				},
+			},
 		},
 		Spec: appsv1alpha1.PersistentPodStateSpec{
 			TargetReference: appsv1alpha1.TargetReference{
@@ -265,6 +308,12 @@ func dumpJSON(o interface{}) string {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PersistentPodStateReconciler) SetupWithManager(mgr ctrl.Manager) error {
+
+	// 添加 Calico API scheme
+	if err := calicoapi.AddToScheme(mgr.GetScheme()); err != nil {
+		return fmt.Errorf("unable to add Calico APIs to scheme: %v", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1alpha1.PersistentPodState{}).
 		Watches(

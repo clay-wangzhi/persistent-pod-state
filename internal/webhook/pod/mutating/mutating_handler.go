@@ -121,7 +121,7 @@ func (h *PodMutatingHandler) handleCreate(ctx context.Context, req admission.Req
 	}, pps)
 	if err != nil {
 		klog.Errorf("获取 PersistentPodState %s/%s 失败: %v", obj.Namespace, ppsName, err)
-		return err
+		return nil
 	}
 
 	// 添加 Calico 注解以固定 IP

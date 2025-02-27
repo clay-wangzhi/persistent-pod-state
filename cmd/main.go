@@ -40,6 +40,7 @@ import (
 	webhookutil "github.com/clay-wangzhi/persistent-pod-state/internal/webhook/util"
 	extclient "github.com/clay-wangzhi/persistent-pod-state/pkg/client"
 	"github.com/clay-wangzhi/persistent-pod-state/pkg/features"
+	calicoapi "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
@@ -55,6 +56,7 @@ func init() {
 
 	utilruntime.Must(appsv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(kubevirtv1.AddToScheme(scheme))
+	utilruntime.Must(calicoapi.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
 }
