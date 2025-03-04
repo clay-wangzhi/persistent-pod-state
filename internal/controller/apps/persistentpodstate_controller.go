@@ -96,6 +96,46 @@ func (r *PersistentPodStateReconciler) VmiAutoGeneratePersistentPodState(ctx con
 		klog.InfoS("VMI has no valid IP, skip auto generate PersistentPodState", "VMI", klog.KRef(virtualMachineInstance.Namespace, virtualMachineInstance.Name))
 		return nil
 	}
+	// 检查是否需要创建 Calico IPReservation
+	if virtualMachineInstance.Status.Interfaces[0].IP != "" {
+		// 构建 IPReservation 对象
+		ipReservation := &calicoapi.IPReservation{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: fmt.Sprintf("vmi-%s-%s", virtualMachineInstance.Namespace, virtualMachineInstance.Name),
+			},
+			Spec: calicoapi.IPReservationSpec{
+				ReservedCIDRs: []string{
+					fmt.Sprintf("%s/32", virtualMachineInstance.Status.Interfaces[0].IP),
+				},
+			},
+		}
+
+		// 检查 IPReservation 是否已存在
+		existingIPReservation := &calicoapi.IPReservation{}
+		err := r.Client.Get(ctx, client.ObjectKey{Name: ipReservation.Name}, existingIPReservation)
+		if err != nil {
+			if !errors.IsNotFound(err) {
+				klog.ErrorS(err, "获取 IPReservation 失败", "VMI", klog.KRef(virtualMachineInstance.Namespace, virtualMachineInstance.Name))
+				return err
+			}
+			// 不存在则创建
+			if err := r.Client.Create(ctx, ipReservation); err != nil {
+				klog.ErrorS(err, "创建 IPReservation 失败", "VMI", klog.KRef(virtualMachineInstance.Namespace, virtualMachineInstance.Name))
+				return err
+			}
+			klog.InfoS("成功创建 IPReservation", "VMI", klog.KRef(virtualMachineInstance.Namespace, virtualMachineInstance.Name), "IP", virtualMachineInstance.Status.Interfaces[0].IP)
+		} else {
+			// 检查 ReservedCIDRs 是否一致，不一致才更新
+			if !reflect.DeepEqual(existingIPReservation.Spec.ReservedCIDRs, ipReservation.Spec.ReservedCIDRs) {
+				existingIPReservation.Spec.ReservedCIDRs = ipReservation.Spec.ReservedCIDRs
+				if err := r.Client.Update(ctx, existingIPReservation); err != nil {
+					klog.ErrorS(err, "更新 IPReservation 失败", "VMI", klog.KRef(virtualMachineInstance.Namespace, virtualMachineInstance.Name))
+					return err
+				}
+				klog.InfoS("成功更新 IPReservation", "VMI", klog.KRef(virtualMachineInstance.Namespace, virtualMachineInstance.Name), "IP", virtualMachineInstance.Status.Interfaces[0].IP)
+			}
+		}
+	}
 	persistentPodState := &appsv1alpha1.PersistentPodState{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      virtualMachineInstance.Name,

@@ -1,5 +1,5 @@
 # Image URL to use all building/pushing image targets
-IMG ?= registry.cn-hangzhou.aliyuncs.com/clay-wangzhi/persistent-pod-statecontroller:v0.12
+IMG ?= registry.cn-hangzhou.aliyuncs.com/clay-wangzhi/persistent-pod-statecontroller:v0.13
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.30.0
 
