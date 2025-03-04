@@ -1,0 +1,581 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: persistent-pod-state
+    control-plane: controller-manager
+  name: persistent-pod-state-system
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.15.0
+  name: persistentpodstates.apps.clay.io
+spec:
+  group: apps.clay.io
+  names:
+    kind: PersistentPodState
+    listKind: PersistentPodStateList
+    plural: persistentpodstates
+    singular: persistentpodstate
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: PersistentPodState is the Schema for the persistentpodstates
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PersistentPodStateSpec defines the desired state of PersistentPodState
+            properties:
+              persistentPodAnnotations:
+                description: Persist the annotations information of the pods that
+                  need to be saved
+                items:
+                  properties:
+                    key:
+                      type: string
+                  required:
+                  - key
+                  type: object
+                type: array
+              requiredPersistentTopology:
+                description: |-
+                  Pod rebuilt topology required for node labels
+                  for example kubernetes.io/hostname
+                properties:
+                  nodeTopologyKeys:
+                    description: A list of node selector requirements by node's labels.
+                    items:
+                      type: string
+                    type: array
+                required:
+                - nodeTopologyKeys
+                type: object
+              targetRef:
+                description: |-
+                  TargetReference contains enough information to let you identify an workload for PersistentPodState
+                  Selector and TargetReference are mutually exclusive, TargetReference is priority to take effect
+                  current support VirtualMachineInstance、StatefulSet
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  kind:
+                    description: Kind of the referent.
+                    type: string
+                  name:
+                    description: Name of the referent.
+                    type: string
+                required:
+                - apiVersion
+                - kind
+                - name
+                type: object
+            required:
+            - targetRef
+            type: object
+          status:
+            description: PersistentPodStateStatus defines the observed state of PersistentPodState
+            properties:
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed for this PersistentPodState. It corresponds to the
+                  PersistentPodState's generation, which is updated on mutation by the API Server.
+                format: int64
+                type: integer
+              podStates:
+                additionalProperties:
+                  properties:
+                    annotations:
+                      additionalProperties:
+                        type: string
+                      description: pod persistent annotations
+                      type: object
+                    nodeName:
+                      description: pod.spec.nodeName
+                      type: string
+                    nodeTopologyLabels:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        node topology labels key=value
+                        for example kubernetes.io/hostname=node-1
+                      type: object
+                    podIP:
+                      description: pod.status.podIP
+                      type: string
+                  type: object
+                description: |-
+                  When the pod is ready, record some status information of the pod, such as: labels, annotations, topologies, etc.
+                  map[string]PodState -> map[Pod.Name]PodState
+                type: object
+            required:
+            - observedGeneration
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: persistent-pod-state
+  name: persistent-pod-state-controller-manager
+  namespace: persistent-pod-state-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: persistent-pod-state
+  name: persistent-pod-state-leader-election-role
+  namespace: persistent-pod-state-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: persistent-pod-state
+  name: persistent-pod-state-apps-persistentpodstate-editor-role
+rules:
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: persistent-pod-state
+  name: persistent-pod-state-apps-persistentpodstate-viewer-role
+rules:
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: persistent-pod-state-manager-role
+rules:
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - validatingwebhookconfigurations
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - apps.clay.io
+  resources:
+  - persistentpodstates/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - projectcalico.org
+  resources:
+  - ipreservations
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: persistent-pod-state-metrics-auth-role
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: persistent-pod-state-metrics-reader
+rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: persistent-pod-state
+  name: persistent-pod-state-leader-election-rolebinding
+  namespace: persistent-pod-state-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: persistent-pod-state-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: persistent-pod-state-controller-manager
+  namespace: persistent-pod-state-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: persistent-pod-state
+  name: persistent-pod-state-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: persistent-pod-state-manager-role
+subjects:
+- kind: ServiceAccount
+  name: persistent-pod-state-controller-manager
+  namespace: persistent-pod-state-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: persistent-pod-state-metrics-auth-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: persistent-pod-state-metrics-auth-role
+subjects:
+- kind: ServiceAccount
+  name: persistent-pod-state-controller-manager
+  namespace: persistent-pod-state-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: persistent-pod-state
+    control-plane: controller-manager
+  name: persistent-pod-state-controller-manager-metrics-service
+  namespace: persistent-pod-state-system
+spec:
+  ports:
+  - name: https
+    port: 8443
+    protocol: TCP
+    targetPort: 8443
+  selector:
+    control-plane: controller-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: persistent-pod-state
+    control-plane: controller-manager
+  name: persistent-pod-state-controller-manager
+  namespace: persistent-pod-state-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        control-plane: controller-manager
+    spec:
+      containers:
+      - args:
+        - --metrics-bind-address=:8443
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        command:
+        - /manager
+        image: registry.cn-hangzhou.aliyuncs.com/clay-wangzhi/persistent-pod-statecontroller:v0.13
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: manager
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      securityContext:
+        runAsNonRoot: true
+      serviceAccountName: persistent-pod-state-controller-manager
+      terminationGracePeriodSeconds: 10
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: persistentpodstate-webhook-certs
+  namespace: persistent-pod-state-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: persistentpodstate-webhook-service
+  namespace: persistent-pod-state-system
+spec:
+  ports:
+  - port: 443
+    targetPort: 9876
+  selector:
+    control-plane: controller-manager
+
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: persistentpodstate-mutating-webhook-configuration
+  annotations:
+    template: ""
+webhooks:
+- clientConfig:
+    caBundle: Cg==
+    service:
+      name: persistentpodstate-webhook-service
+      namespace: persistent-pod-state-system
+      path: /mutate-pod
+  failurePolicy: Ignore
+  admissionReviewVersions:
+  - v1
+  - v1beta1
+  sideEffects: None
+  timeoutSeconds: 30
+  name: mpod-create.clay.io
+  namespaceSelector:
+    matchExpressions:
+    - key: persistentpodstate-injection
+      operator: In
+      values:
+      - enabled
+  rules:
+  - apiGroups:
+    - kubevirt.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - virtualmachineinstances
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: persistentpodstate-validating-webhook-configuration
+  annotations:
+    template: ""
+webhooks:
+- clientConfig:
+    caBundle: Cg==
+    service:
+      name: persistentpodstate-webhook-service
+      namespace: persistent-pod-state-system
+      path: /validate-pod
+  failurePolicy: Ignore
+  admissionReviewVersions:
+  - v1
+  - v1beta1
+  sideEffects: None
+  timeoutSeconds: 30
+  name: vpod.clay.io
+  namespaceSelector:
+    matchExpressions:
+    - key: persistentpodstate-injection
+      operator: In
+      values:
+      - enabled
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - pods
