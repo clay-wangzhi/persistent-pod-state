@@ -265,6 +265,26 @@ rules:
   - update
   - watch
 - apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - apps.clay.io
   resources:
   - persistentpodstates
@@ -290,6 +310,14 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -455,7 +483,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: registry.cn-hangzhou.aliyuncs.com/clay-wangzhi/persistent-pod-statecontroller:v0.13
+        image: registry.cn-hangzhou.aliyuncs.com/clay-wangzhi/persistent-pod-statecontroller:v0.16
         livenessProbe:
           httpGet:
             path: /healthz
@@ -533,6 +561,15 @@ webhooks:
       values:
       - enabled
   rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - pods
   - apiGroups:
     - kubevirt.io
     apiVersions:

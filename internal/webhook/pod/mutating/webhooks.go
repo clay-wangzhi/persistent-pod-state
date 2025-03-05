@@ -24,8 +24,7 @@ import (
 	"github.com/clay-wangzhi/persistent-pod-state/internal/webhook/util/framework"
 )
 
-// +kubebuilder:webhook:path=/mutate-pod,mutating=true,failurePolicy=fail,sideEffects=None,admissionReviewVersions=v1;v1beta1,groups="",resources=pods,verbs=create,versions=v1,name=mpod-create.clay.io
-// +kubebuilder:webhook:path=/mutate-pod,mutating=true,failurePolicy=fail,sideEffects=None,admissionReviewVersions=v1;v1beta1,groups="",resources=pods,verbs=update,versions=v1,name=mpod-update.clay.io
+// +kubebuilder:webhook:path=/mutate-v1-pod,mutating=true,failurePolicy=fail,groups="",resources=pods,verbs=create;update,versions=v1,name=mpod.kb.io,sideEffects=None,admissionReviewVersions=v1
 
 var (
 	// HandlerBuilderMap contains admission webhook handlers builder

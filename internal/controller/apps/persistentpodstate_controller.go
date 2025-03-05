@@ -35,6 +35,7 @@ import (
 
 	appsv1alpha1 "github.com/clay-wangzhi/persistent-pod-state/api/apps/v1alpha1"
 	calicoapi "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -55,6 +56,9 @@ type PersistentPodStateReconciler struct {
 // +kubebuilder:rbac:groups=apps.clay.io,resources=persistentpodstates/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.clay.io,resources=persistentpodstates/finalizers,verbs=update
 // +kubebuilder:rbac:groups=projectcalico.org,resources=ipreservations,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -66,7 +70,7 @@ type PersistentPodStateReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.4/pkg/reconcile
 func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-
+	// 处理 VMI 请求
 	if strings.Contains(req.Name, AutoGeneratePersistentPodStatePrefix+"#"+KindVmi) {
 		arr := strings.Split(req.Name, "#")
 		if len(arr) != 3 {
@@ -82,12 +86,32 @@ func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, r.VmiAutoGeneratePersistentPodState(ctx, virtualMachineInstance)
 	}
 
+	// 处理 StatefulSet 请求
+	if strings.Contains(req.Name, AutoGeneratePersistentPodStatePrefix+"#"+KindStatefulSet) {
+		arr := strings.Split(req.Name, "#")
+		if len(arr) != 3 {
+			klog.InfoS("Reconcile PersistentPodState StatefulSet is invalid", "workload", req)
+			return ctrl.Result{}, nil
+		}
+		ns, name := req.Namespace, arr[2]
+		statefulSet := &appsv1.StatefulSet{}
+		err := r.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, statefulSet)
+		if err != nil {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, r.StatefulSetAutoGeneratePersistentPodState(ctx, statefulSet)
+	}
+
 	// 检查 VMI 是否存在
 	vmi := &kubevirtv1.VirtualMachineInstance{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}, vmi); err == nil {
 		return ctrl.Result{}, r.VmiAutoGeneratePersistentPodState(ctx, vmi)
 	}
-
+	// 检查 StatefulSet 是否存在
+	statefulSet := &appsv1.StatefulSet{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}, statefulSet); err == nil {
+		return ctrl.Result{}, r.StatefulSetAutoGeneratePersistentPodState(ctx, statefulSet)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -228,6 +252,10 @@ func (r *PersistentPodStateReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Watches(
 			&kubevirtv1.VirtualMachineInstance{},
 			&enqueueRequestForVirtualMachineInstance{reader: mgr.GetClient()},
+		).
+		Watches(
+			&appsv1.StatefulSet{},
+			&enqueueRequestForStatefulSet{reader: mgr.GetClient()},
 		).
 		Complete(r)
 }
