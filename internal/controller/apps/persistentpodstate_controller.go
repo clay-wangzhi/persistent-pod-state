@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1alpha1 "github.com/clay-wangzhi/persistent-pod-state/api/apps/v1alpha1"
+	"github.com/clay-wangzhi/persistent-pod-state/pkg/features"
 	calicoapi "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -72,6 +73,11 @@ type PersistentPodStateReconciler struct {
 func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// 处理 VMI 请求
 	if strings.Contains(req.Name, AutoGeneratePersistentPodStatePrefix+"#"+KindVmi) {
+		if !features.GlobalConfig.EnableVMIPersistence {
+			klog.V(4).InfoS("VMI persistence disabled, skipping VMI request", "request", req)
+			return ctrl.Result{}, nil
+		}
+
 		arr := strings.Split(req.Name, "#")
 		if len(arr) != 3 {
 			klog.InfoS("Reconcile PersistentPodState kubevirt is invalid", "workload", req)
@@ -88,6 +94,11 @@ func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	// 处理 StatefulSet 请求
 	if strings.Contains(req.Name, AutoGeneratePersistentPodStatePrefix+"#"+KindStatefulSet) {
+		if !features.GlobalConfig.EnableStatefulSetPersistence {
+			klog.V(4).InfoS("StatefulSet persistence disabled, skipping StatefulSet request", "request", req)
+			return ctrl.Result{}, nil
+		}
+
 		arr := strings.Split(req.Name, "#")
 		if len(arr) != 3 {
 			klog.InfoS("Reconcile PersistentPodState StatefulSet is invalid", "workload", req)
@@ -103,15 +114,20 @@ func (r *PersistentPodStateReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	// 检查 VMI 是否存在
-	vmi := &kubevirtv1.VirtualMachineInstance{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}, vmi); err == nil {
-		return ctrl.Result{}, r.VmiAutoGeneratePersistentPodState(ctx, vmi)
+	if features.GlobalConfig.EnableVMIPersistence {
+		vmi := &kubevirtv1.VirtualMachineInstance{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}, vmi); err == nil {
+			return ctrl.Result{}, r.VmiAutoGeneratePersistentPodState(ctx, vmi)
+		}
 	}
 	// 检查 StatefulSet 是否存在
-	statefulSet := &appsv1.StatefulSet{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}, statefulSet); err == nil {
-		return ctrl.Result{}, r.StatefulSetAutoGeneratePersistentPodState(ctx, statefulSet)
+	if features.GlobalConfig.EnableStatefulSetPersistence {
+		statefulSet := &appsv1.StatefulSet{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}, statefulSet); err == nil {
+			return ctrl.Result{}, r.StatefulSetAutoGeneratePersistentPodState(ctx, statefulSet)
+		}
 	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -247,15 +263,30 @@ func (r *PersistentPodStateReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		return fmt.Errorf("unable to add Calico APIs to scheme: %v", err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&appsv1alpha1.PersistentPodState{}).
-		Watches(
+	builder := ctrl.NewControllerManagedBy(mgr).
+		For(&appsv1alpha1.PersistentPodState{})
+
+	// 根据配置决定是否监听 VMI
+	if features.GlobalConfig.EnableVMIPersistence {
+		builder = builder.Watches(
 			&kubevirtv1.VirtualMachineInstance{},
 			&enqueueRequestForVirtualMachineInstance{reader: mgr.GetClient()},
-		).
-		Watches(
+		)
+		klog.InfoS("VMI persistence enabled, watching VirtualMachineInstance resources")
+	} else {
+		klog.InfoS("VMI persistence disabled, not watching VirtualMachineInstance resources")
+	}
+
+	// 根据配置决定是否监听 StatefulSet
+	if features.GlobalConfig.EnableStatefulSetPersistence {
+		builder = builder.Watches(
 			&appsv1.StatefulSet{},
 			&enqueueRequestForStatefulSet{reader: mgr.GetClient()},
-		).
-		Complete(r)
+		)
+		klog.InfoS("StatefulSet persistence enabled, watching StatefulSet resources")
+	} else {
+		klog.InfoS("StatefulSet persistence disabled, not watching StatefulSet resources")
+	}
+
+	return builder.Complete(r)
 }

@@ -481,9 +481,16 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
+        - --enable-vmi-persistence=$(ENABLE_VMI_PERSISTENCE)
+        - --enable-statefulset-persistence=$(ENABLE_STATEFULSET_PERSISTENCE)
         command:
         - /manager
-        image: registry.cn-hangzhou.aliyuncs.com/clay-wangzhi/persistent-pod-statecontroller:v0.16
+        env:
+        - name: ENABLE_VMI_PERSISTENCE
+          value: "true"
+        - name: ENABLE_STATEFULSET_PERSISTENCE
+          value: "true"
+        image: registry.cn-hangzhou.aliyuncs.com/clay-wangzhi/persistent-pod-statecontroller:v0.17
         livenessProbe:
           httpGet:
             path: /healthz

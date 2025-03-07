@@ -63,6 +63,8 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --enable-vmi-persistence=$(ENABLE_VMI_PERSISTENCE)
+          - --enable-statefulset-persistence=$(ENABLE_STATEFULSET_PERSISTENCE)
         image: controller:latest
         name: manager
         securityContext:
@@ -91,5 +93,10 @@ spec:
           requests:
             cpu: 10m
             memory: 64Mi
+        env:
+        - name: ENABLE_VMI_PERSISTENCE
+          value: "true"
+        - name: ENABLE_STATEFULSET_PERSISTENCE
+          value: "true"
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	appsv1alpha1 "github.com/clay-wangzhi/persistent-pod-state/api/apps/v1alpha1"
+	"github.com/clay-wangzhi/persistent-pod-state/pkg/features"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -62,11 +63,19 @@ func (h *PodMutatingHandler) Handle(ctx context.Context, req admission.Request) 
 
 	// 处理 VMI 请求
 	if req.AdmissionRequest.Resource.Resource == "virtualmachineinstances" {
+		if !features.GlobalConfig.EnableVMIPersistence {
+			klog.V(4).Infof("VMI persistence disabled, skipping VMI webhook for %s", req.Name)
+			return admission.Allowed("")
+		}
 		return h.handleVMI(ctx, req)
 	}
 
 	// 处理 Pod 请求
 	if req.AdmissionRequest.Resource.Resource == "pods" {
+		if !features.GlobalConfig.EnableStatefulSetPersistence {
+			klog.V(4).Infof("StatefulSet persistence disabled, skipping Pod webhook for %s", req.Name)
+			return admission.Allowed("")
+		}
 		return h.handlePod(ctx, req)
 	}
 

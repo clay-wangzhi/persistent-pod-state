@@ -48,3 +48,23 @@ func init() {
 func SetDefaultFeatureGates() {
 
 }
+
+// PersistenceConfig 存储持久化相关配置
+type PersistenceConfig struct {
+	// EnableVMIPersistence 控制是否启用 VMI 持久化
+	EnableVMIPersistence bool
+	// EnableStatefulSetPersistence 控制是否启用 StatefulSet 持久化
+	EnableStatefulSetPersistence bool
+}
+
+// GlobalConfig 存储全局配置
+var GlobalConfig = PersistenceConfig{
+	EnableVMIPersistence:         true,
+	EnableStatefulSetPersistence: true,
+}
+
+// SetPersistenceConfig 设置持久化配置
+func SetPersistenceConfig(enableVMI, enableStatefulSet bool) {
+	GlobalConfig.EnableVMIPersistence = enableVMI
+	GlobalConfig.EnableStatefulSetPersistence = enableStatefulSet
+}

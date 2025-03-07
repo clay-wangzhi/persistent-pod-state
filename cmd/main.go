@@ -67,6 +67,8 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var enableVMIPersistence bool
+	var enableStatefulSetPersistence bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -78,6 +80,10 @@ func main() {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&enableVMIPersistence, "enable-vmi-persistence", true,
+		"If set, VMI persistence will be enabled")
+	flag.BoolVar(&enableStatefulSetPersistence, "enable-statefulset-persistence", true,
+		"If set, StatefulSet persistence will be enabled")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -185,6 +191,13 @@ func main() {
 		setupLog.Error(err, "unable to add readyz check")
 		os.Exit(1)
 	}
+
+	// 设置持久化配置
+	features.SetPersistenceConfig(enableVMIPersistence, enableStatefulSetPersistence)
+
+	setupLog.Info("persistence configuration",
+		"enableVMIPersistence", enableVMIPersistence,
+		"enableStatefulSetPersistence", enableStatefulSetPersistence)
 
 	go func() {
 		setupLog.Info("wait webhook ready")
